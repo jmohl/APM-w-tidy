@@ -1,0 +1,48 @@
+---
+title: "Chapter 3"
+author: "Jeff"
+date: "12/7/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidymodels)
+library(tidyverse) #note that this doesn't load everything, just the most commonly used packages
+library(AppliedPredictiveModeling)
+library(corrplot)
+library(moments)
+```
+
+## Basic computing tools
+
+apropos can be used to scan loaded packages for functions that relate to a certain thing you are looking for. You can use RSiteSearch("confusion",restrict = "functions") to look online, but this will pretty often return a ton of results, especially for something common.
+
+```{r apropos}
+apropos("conf_mat") #adapted from "confusionMatrix" in caret
+```
+
+```{r load example data}
+data("segmentationOriginal") #data for the cell segmentation example project
+segData <- subset(segmentationOriginal,Case =="Train")
+cellID <- segData$Cell
+class <- segData$Class
+case <- segData$Case
+
+#remove using tidy
+segData <- segData %>% select(-c(Cell,Class,Case)) #adapted from just removing the raw column numbers in base R
+# also removing any variables with status in the name
+segData <- segData %>% select(-contains("Status")) #first time finding that DPLY is helpful. Base solution with Grep was less trasparent
+
+```
+
+## Transformation
+
+Here I'm trying to see if I can avoid using the e1071 package, which may be pointless. It just seems like a bad idea to get overly comfortable using packages that are designed for specific classes. Here I'm using the moments package instead to calculate skewness
+
+```{r}
+skewness(segData$AngleCh1)
+skewValues <- apply(segData,2,skewness)
+head(skewValues)
+```
+
