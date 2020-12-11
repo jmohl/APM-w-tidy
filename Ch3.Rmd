@@ -44,5 +44,80 @@ Here I'm trying to see if I can avoid using the e1071 package, which may be poin
 skewness(segData$AngleCh1)
 skewValues <- apply(segData,2,skewness)
 head(skewValues)
+
+#apply boxcox transform to automatically adjust for skewness
+#Ch1AreaTrans<- boxcox_trans(segData$AreaCh1) #this doesn't work as expected, to find the lambda. It actually expects lambda as the input
+#trying again using tidymdels recipes
+rec <- recipe(~.,data = as.data.frame(segData$AreaCh1))
+bc_trans <- step_BoxCox(rec, all_numeric())
+bc_estimates <- prep(bc_trans, training = as.data.frame(segData$AreaCh1))
+bc_data <- bake(bc_estimates, as.data.frame(segData$AreaCh1))
+
+head(bc_data)
+head(segData$AreaCh1)
+# I cant figure out how to automatically extract the lambda, but I can see that it is fit to -0.856, which approx matches the text of -0.9. Verifying with the equation
+(819^(-0.856)-1)/(-0.856)
+#Verified, this is the adapted way to use boxcox scaling with the tidymodels framwork
+skewness(bc_data)
+skewness(segData$AreaCh1)
 ```
 
+
+
+
+
+```{r preprocess}
+#charat function is preProcess.
+#First use prcomp - principle component analysi, base R
+pcaObject <- prcomp(segData, center = TRUE, scale. = TRUE)
+percentVariance <- pcaObject$sdev^2/sum(pcaObject$sdev^2)*100
+percentVariance[1:3]
+#I believe that preprocess as discussed in the text has been basically rolled up into these recipes. To verify I'm going to try and make a recipe that combined the box-cox and pca steps
+rec <- recipe(~.,data =segData)
+trans <- rec %>% 
+  step_BoxCox(all_numeric()) %>%
+  step_center(all_predictors()) %>%
+  step_scale(all_predictors()) %>%
+  step_pca(all_predictors())
+
+trained_trans <- prep(trans,training = segData)  
+
+values <- bake(trained_trans,new_data = segData)
+
+head(values)
+#these values are slightly different from the text PC values (which makes sense because the Box Cox transform values were slightly different before) but overall it seems like this is approximately the right way to redo this workflow using tidymodels
+```
+
+```{r filtering}
+#the function nearZeroVar is most similar to step_nzv
+correlations <- cor(segData)
+dim(correlations)
+correlations[1:4,1:4]
+
+corrplot(correlations,order="hclust", method="square",tl.cex = .05) #yeesh this does not look good in the window. Choosing any reasonable size for the text causes the plot to just be much too small
+
+#step_corr seems to serve the same purpose as the corr filtering in Carat
+
+```
+```{r dummy vars}
+#have to come back to this because I can't get the cars dataset
+```
+```{r Exercise 1}
+#requires Glass dataset from MLbench
+library('mlbench')
+data(Glass)
+str(Glass)
+# 1) using visualization, explore the predictor variables to understand their distributions and the relationships between the predictors
+
+summary(Glass)
+
+
+```
+
+```{r Exercise 2}
+
+```
+```{r Exercise 3}
+data("BloodBrain")
+
+```

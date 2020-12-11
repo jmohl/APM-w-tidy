@@ -1,0 +1,154 @@
+---
+title: "R for DS intro chs"
+output: html_notebook
+---
+
+Quickly working through the intro chapters in R for datascience. Trying to refresh myself on the tidyverse, especially ggplot for EDA.
+
+## Chapter 3: data visualization with GGplot
+
+```{r}
+library(tidyverse)
+data(mpg)
+
+ggplot(data=mpg) + 
+  geom_point(mapping = aes(x=displ, y=hwy))
+```
+
+```{r}
+#
+ggplot(data=mpg) +
+  geom_point(mapping = aes(x=displ, y=hwy, color = class))
+#note that if you want to specify the color generally (rather than depending on the data) you put it outside of aes
+
+ggplot(data=mpg) +
+  geom_point(mapping = aes(x=displ, y=hwy), color="blue")
+
+```
+
+```{r}
+#facets, basically serves the function of subplots in matlab
+ggplot(data=mpg) + geom_point(mapping = aes(x=displ,y = hwy)) +
+  facet_wrap(~ class, nrow =2)
+ggplot(data=mpg) + geom_point(mapping = aes(x=displ,y = hwy)) +
+  facet_grid(drv~ cyl)
+
+```
+
+
+```{r}
+ggplot(data=mpg) + 
+  geom_smooth(mapping = aes(x=displ,y = hwy, linetype = drv)) +
+  geom_point(mapping = aes(x=displ, y=hwy, color = class))
+
+#this is bad because it's redundant, better to put the shared mapping in the ggplot line and only have specific other mappings in the specific geom lines
+
+ggplot(data=mpg, mapping = aes(x=displ, y=hwy)) + 
+  geom_smooth(mapping = aes(linetype = drv)) +
+  geom_point(mapping = aes(color = class))
+
+#can also filter the data specifically for whichever piece of the plot you want to look at
+ggplot(data=mpg, mapping = aes(x=displ, y=hwy)) + 
+  geom_smooth(mapping = aes(color = drv)) +
+  geom_point(data = filter(mpg,class=="subcompact"), mapping = aes(color = drv))
+
+
+```
+Many plotting functions have a built in stat function which performs some operation on the data before plotting. Examples include the smooth function above or the bar geom. This is important to know because sometime you might wanna change the stat. For instance you want to make a bar plot of data that already contains the counts.
+
+```{r}
+#two examples of barplots, with different data
+ggplot(data = diamonds) + 
+  geom_bar(mapping=aes(x=cut))
+
+ex_data <- tribble(
+  ~cut, ~freq,
+  "Fair", 1610,
+  "Good", 4906,
+  "Very Good", 12082,
+  "Premium", 13791,
+  "Ideal",21551
+)
+
+ggplot(data=ex_data) +
+  geom_bar(mapping = aes(x=cut,y=freq), stat="identity")
+
+```
+
+There are a lot of useful *position* options too. The ones I use most often are "dodge" (makes the bar plots unstack if plotting subgroups), and "jitter" (jitters dots, very useful for when plotting scatters that involve ints). This last even has it's own geom
+
+```{r}
+ggplot(data = mpg) +
+  geom_jitter(mapping=aes(x=displ, y=hwy))
+```
+# Data Transformation
+This gets into the nitty gritty of dplyr. This is focusing on filter, arrange, select, mutate, and summarize. Since I have used those all a fair bit I'm probably going to just breeze through this section rather than going through carefully and adding the examples here. Will try to include anything that is unusual or interesting.
+
+Near(): equivalent of == but useful for comparing floats
+x %in% y: finds every row where X is one of the values in y
+matches(): lets you use regular expressions
+transmute(): like mutate for creating new variables, but throws everything away except the new vars
+%%: remainder
+%/%: integer division
+*if need rolling aggregates, try RcppRoll package*
+
+
+```{r}
+library("nycflights13")
+delays <- flights %>%
+  filter(!is.na(dep_delay),!is.na(arr_delay)) %>%
+  group_by(tailnum) %>%
+  summarise(
+    delay = mean(arr_delay),
+    n=n()
+    )
+
+ggplot(data=delays,mapping =aes(x=n,y=delay)) +
+  geom_point(alpha = .10)
+
+
+```
+# Exploratory data analysis
+
+geom_freqpoly is a line histogram. Wish I had known that before!
+use coord_cartesian() to zoom in on different parts of the graph. This is better than using the ggplot version of xlim and ylim because it doesn't throw away data outside the view
+ifelse is good for replacing weird values. For instance mutate(y = ifelse(y<3, NA, y)) would replace all the values less than 3 with NA
+coord_flip(): always handy, rotates by flipping x and y on plot
+cut_number(x,n_groups): cuts continious data into groups while trying to keep the same number of data points in each group. Seems useful
+
+*after all that typing, we didn't need to include mapping or x and y or whatever in our ggplot calls. It's much easier to just write ggplot(data, aes(x,y))*
+
+```{r}
+#reordering is handy - reorder(this_Var, by_this_var, function to apply)
+ggplot(data = mpg) + 
+  geom_boxplot(mapping=aes(x=reorder(class,hwy,FUN = median),y=hwy))
+
+#also figuring ut which combinations are common is a nice thing to do, here are two methods
+#size of dots
+ggplot(data = diamonds) +
+  geom_count(mapping=aes(x=cut, y=clarity))
+
+diamonds %>% 
+  count(clarity, cut) %>%
+  ggplot(mapping = aes(x=cut, y=clarity)) +
+  geom_tile(mapping = aes(fill=n))
+```
+
+```{r}
+#really cool way to deal with overplotting (norally I would change the alpha)
+
+ggplot(data = diamonds)+
+  geom_bin2d(mapping = aes(x=carat, y=price))
+
+ggplot(data = diamonds)+
+  geom_hex(mapping = aes(x=carat, y=price)) #note requires hexbin package, cool though
+
+
+```
+
+#Final workflow tips: project
+
+Pattern to use all the time to make sure you have everything you need in your script
+1) ctrl + shift + f11 to restart r kernel
+2) ctrl+shift+ s to run code from the beginning
+
