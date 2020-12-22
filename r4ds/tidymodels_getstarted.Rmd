@@ -1,0 +1,209 @@
+---
+title: "tidymodels_intro"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidymodels)  # for the parsnip package, along with the rest of tidymodels
+
+# Helper packages
+library(readr)       # for importing data
+library(broom) # for converting bayesian models to tidy tibbles
+library(dotwhisker)
+```
+
+## Working through the tidymodels documentation
+
+Was pretty slow going working through the APM text and trying to update it without having a strong basis in the syntax for tidymodels. So I'm going to take a step back and go through the simple tutorials here for tidymodels.
+
+Link:https://www.tidymodels.org/start/models/
+
+```{r sea urchin data}
+urchins <-
+  # Data were assembled for a tutorial 
+  # at https://www.flutterbys.com.au/stats/tut/tut7.5a.html
+  read_csv("https://tidymodels.org/start/models/urchins.csv") %>% 
+  # Change the names to be a little more verbose
+  setNames(c("food_regime", "initial_volume", "width")) %>%
+  # Factors are very helpful for modeling, so we convert one column
+  mutate(food_regime = factor(food_regime, levels = c("Initial", "Low", "High")))
+
+skimr::skim(urchins)
+
+```
+
+## Including Plots
+
+```{r data checking}
+ggplot(urchins, aes(x=initial_volume, y=width, color = food_regime)) +
+  geom_point()+
+  geom_smooth(method = lm,se=FALSE)+
+  scale_color_viridis_d(option = "plasma", end = .7) #nice trick for making colors better
+
+```
+
+Build and fit a simple model. Note that this model contains the normal lm model features in lm_fit$fit. This is an anova model looking at the interaction between the variables as well
+```{r}
+lm_mod <- linear_reg() %>%
+  set_engine("lm")
+
+lm_fit <-  lm_mod %>% 
+  fit(width ~initial_volume * food_regime,data = urchins)
+
+tidy(lm_fit) %>%
+  dwplot(dot_args = list(size =2, color = "black"),
+         whisker_args = list(color = "black"),
+         vline = geom_vline(xintercept = 0, color = "grey50", linetype = 2))
+```
+
+#Using some of the extra parsnip features
+One major benefit is all the tidy models can calculate the variability using a common syntax, instead of having to rewrite every time.
+
+```{r}
+new_points <- expand.grid(initial_volume = 20, food_regime=c("Initial", "Low", "High"))
+
+mean_pred <-  predict(lm_fit,new_data = new_points)
+conf_int_pred <- predict(lm_fit, new_data = new_points, type="conf_int")
+
+#bind data together, this is the power of tidy
+plot_data <- new_points %>%
+  bind_cols(mean_pred) %>%
+  bind_cols(conf_int_pred)
+
+ggplot(plot_data, aes(x= food_regime)) +
+  geom_point(aes(y=.pred)) +
+  geom_errorbar(aes(ymin = .pred_lower, ymax = .pred_upper), width = .2) + 
+  labs(y="urchin size")
+
+```
+
+Changing the model engine: using a bayesian model (our old friend stan). This does the same thing as abve using a bayesian approach, but it's possible that it's like, really slow. Especially on my laptop.
+
+```{r}
+# set the prior distribution
+prior_dist <- rstanarm::student_t(df = 1)
+
+set.seed(123)
+
+# make the parsnip model
+bayes_mod <-   
+  linear_reg() %>% 
+  set_engine("stan", 
+             prior_intercept = prior_dist, 
+             prior = prior_dist) 
+
+# train the model
+bayes_fit <- 
+  bayes_mod %>% 
+  fit(width ~ initial_volume * food_regime, data = urchins)
+
+print(bayes_fit, digits = 5)
+
+bayes_plot_data <- 
+  new_points %>% 
+  bind_cols(predict(bayes_fit, new_data = new_points)) %>% 
+  bind_cols(predict(bayes_fit, new_data = new_points, type = "conf_int"))
+
+ggplot(bayes_plot_data, aes(x = food_regime)) + 
+  geom_point(aes(y = .pred)) + 
+  geom_errorbar(aes(ymin = .pred_lower, ymax = .pred_upper), width = .2) + 
+  labs(y = "urchin size") + 
+  ggtitle("Bayesian model with t(1) prior distribution")
+```
+The useful idea around the whole tidymodels framework is to standardizethe interfaces with models. That means you can change the whole model (as using the stan approach here) but keep everything else the same. Super useful for iterating model development.
+
+## Using recipes to pre-process data
+
+```{r}
+library(nycflights13)
+set.seed(123)
+data(flights)
+flight_data <- flights %>%
+  mutate(
+    # Convert the arrival delay to a factor
+    arr_delay = ifelse(arr_delay >= 30, "late", "on_time"),
+    arr_delay = factor(arr_delay),
+    # We will use the date (not date-time) in the recipe below
+    date = as.Date(time_hour)
+  ) %>% 
+  # Include the weather data
+  inner_join(weather, by = c("origin", "time_hour")) %>% 
+  # Only retain the specific columns we will use
+  select(dep_time, flight, origin, dest, air_time, distance, 
+         carrier, date, arr_delay, time_hour) %>% 
+  # Exclude missing data
+  na.omit() %>% 
+  # For creating models, it is better to have qualitative columns
+  # encoded as factors (instead of character strings)
+  mutate(across(where(is.character), as.factor)) #I updated this to use the new standard with across instead of 
+
+skim(flight_data)
+```
+
+```{r}
+set.seed(555)
+data_split <-  initial_split(flight_data, prop = .75)
+
+train_data <- training(data_split)
+test_data <- testing(data_split)
+
+flights_rec <-  recipe(arr_delay ~., data = train_data) %>%
+  update_role(flight, time_hour, new_role = "ID") #this is used to keep these variables in the data but not use them for the model. 
+
+summary(flights_rec)
+
+#feature engineering as part of recipe
+flights_rec <- recipe(arr_delay ~., data = train_data) %>%
+  update_role(flight, time_hour, new_role = "ID") %>%
+  step_date(date,features = c("dow","month")) %>%
+  step_holiday(date, holidays = timeDate::listHolidays("US")) %>%
+  step_rm(date) %>%
+  step_dummy(all_nominal(), -all_outcomes()) %>%
+  step_zv(all_predictors()) #removes any features with only one value
+
+test <- prep(flights_rec)
+
+summary(test)
+
+```
+
+Step of making a model happen in tidymodels
+1. Process the recipe using the training set
+2. Apply the recipe to the training set
+3. Apply the recipe to the test set
+
+We generally put these steps into a workflow, which pairs the model to a recipe. You can then pull out individual components later if you want, rather than running the prep function like I did above to look at things. It's possible that this is quite slow because I'm trying to fit the model with 169 predictors on 8G ram. So maybe don't waste a bunch of time on this. 
+
+```{r}
+lr_mod <- logistic_reg() %>%
+  set_engine("glm")
+
+flights_workflow <- workflow() %>%
+  add_model(lr_mod) %>%
+  add_recipe(flights_rec)
+
+flights_workflow
+
+flights_fit <- flights_workflow %>%
+  fit(data = train_data)
+
+flights_fit %>% pull_workflow_fit() %>% tidy()
+```
+Using the trained model for prediction is one more step
+
+```{r}
+flights_pred <- predict(flights_fit, test_data, type = "prob") %>%
+  bind_cols(test_data %>% select(arr_delay, time_hour, flight))
+
+flights_pred
+
+#evaluate using AUC
+
+flights_pred %>% roc_curve(truth = arr_delay, .pred_late) %>%
+  autoplot()
+
+flights_pred %>% roc_auc(truth = arr_delay, .pred_late)
+```
+
+# Evaluate your model with resampling

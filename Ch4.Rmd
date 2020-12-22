@@ -1,0 +1,114 @@
+---
+title: "Chapter 4"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(AppliedPredictiveModeling)
+library(tidymodels)
+library(tidyverse)
+library(skimr) #useful for initial glimpse of data
+
+```
+
+## Chapter 4
+# data splitting
+
+```{r data splitting}
+data("two_class_dat") # this is somewhat differently formatted from whatever version was referenced in the book originally
+glimpse(two_class_dat)
+two_class_dat %>% skim()
+# rather than using Carat, will use rsample to split data
+set.seed(1)
+this_split <- initial_split(two_class_dat, strata = Class) #here I'm stratifying on class so that the split groups have the same ratio of class 1 to class 2. This wasn't part of the tutorial
+df_train <- training(this_split)
+df_test <- testing(this_split)
+
+prop.table(table(df_train$Class))
+prop.table(table(df_test$Class))
+nrow(df_train)
+```
+Resampling methods in rsample are:
+V fold cross validation, or repeated CV: vfold_cv()
+bootstrapping: bootstraps()
+
+
+```{r resampling methods}
+df_cv <- vfold_cv(df_train,v=10,strata = Class)
+
+#this allows me to look at the mean percentage of data with class type 1. Can see that the ratios are the same between splits, because I stratified on class
+map_dbl(df_cv$splits,
+        function(x) {
+          dat <- as.data.frame(x)$Class
+          mean(dat == "Class1")
+        })
+
+df_cv <- vfold_cv(df_train,v=10)
+map_dbl(df_cv$splits,
+        function(x) {
+          nrow(x)
+        })
+
+ggplot(tidy(df_cv), aes(x=Fold, y=Row, fill = Data)) + 
+  geom_tile() + 
+  scale_fill_brewer()
+```
+# Basic model building
+
+```{r knn model}
+knn_recipe <- recipe(Class ~., data = df_train)
+
+recipe_preped <- prep(knn_recipe)
+
+knn_model <- nearest_neighbor() %>%
+  set_engine("kknn") %>%
+  set_mode("classification")
+
+knn_workflow <- workflow() %>%
+  add_recipe(knn_recipe) %>%
+  add_model(knn_model)
+
+knn_fit <- knn_workflow %>%
+  last_fit(this_split) #note here that I'm using the training and testing data both
+
+
+knn_predictions <- knn_fit %>% 
+  collect_predictions()
+
+knn_performance <- knn_fit %>%
+  collect_metrics()
+
+ggplot(knn_predictions, aes(x=.pred_Class1, y=.pred_Class2, color=Class)) +
+  geom_jitter(height = .25)
+
+#just a little plot to evaluate the clustering. Larger size dots are the predicted points
+ggplot(df_train, aes(A,B, color = Class))+ 
+  geom_point(alpha = .5) +
+  geom_point(data = df_test, aes(A,B,color=knn_predictions$.pred_class), size = 3)
+```
+# Model tuning
+This is going to require a bit of reworking I think, since I am not using Caret and a lot of the approach to model building seems pretty differen.
+
+We are going to try and tune an SVM model to predict credit quality. 
+```{r}
+data("credit_data")
+
+#adding centering and scaling steps
+svm_recipe <- recipe(Status ~., data = credit_data) %>%
+  step_center(all_numeric()) %>%
+  step_scale(all_numeric())
+
+recipe_preped <- prep(svm_recipe)
+
+#note sure if any of this is right yet
+svm_model <- svm_rbf(cost = 10) %>%
+  set_mode("classification")
+
+
+
+fit_svm <- bake(recipe_preped,new_data = credit_data)
+
+```
+
