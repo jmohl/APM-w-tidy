@@ -138,7 +138,7 @@ flight_data <- flights %>%
   # encoded as factors (instead of character strings)
   mutate(across(where(is.character), as.factor)) #I updated this to use the new standard with across instead of 
 
-skim(flight_data)
+skimr::skim(flight_data)
 ```
 
 ```{r}
@@ -207,3 +207,151 @@ flights_pred %>% roc_auc(truth = arr_delay, .pred_late)
 ```
 
 # Evaluate your model with resampling
+
+```{r setting up data}
+library(modeldata)
+
+data("cells")
+
+glimpse(cells)
+
+cells %>% count(class) %>%
+  mutate(prop = n/sum(n))
+
+set.seed(123)
+cell_split <- initial_split(cells %>% select(-case), strata = class)
+
+cell_train <- training(cell_split)
+cell_test <- testing(cell_split)
+
+```
+fitting a random forest model. There is no recipe used for this model, since random forest handles variable weirdness pretty well and you don't need to do a ton of preprocessing. Note that I expect this to be pretty slow on a laptop... aaand it's not. Like 5 seconds.
+
+```{r}
+rf_mod <- rand_forest(trees = 1000) %>%
+  set_engine("ranger") %>%
+  set_mode("classification")
+
+set.seed(234)
+rf_fit <-  rf_mod %>%
+  fit(class ~.,data = cell_train)
+rf_fit
+
+```
+
+Estimating performance:
+Going to use AUC and classification accuracy
+**Note that in the tidyverse the folds are referred to as having 'analysis' and 'assessment' subsets)**
+
+
+```{r}
+set.seed(345)
+folds <-  vfold_cv(cell_train, v=10)
+
+rf_wf <-  workflow()%>%
+  add_model(rf_mod) %>%
+  add_formula(class ~.)
+
+set.seed(456)
+rf_fit_rs <- rf_wf %>%
+  fit_resamples(folds)
+
+collect_metrics(rf_fit_rs)
+
+rf_testing_pred <- 
+  predict(rf_fit, cell_test) %>% 
+  bind_cols(predict(rf_fit, cell_test, type = "prob")) %>% 
+  bind_cols(cell_test %>% select(class))
+
+rf_testing_pred %>%                   # test set predictions
+  roc_auc(truth = class, .pred_PS)
+
+rf_testing_pred %>%                   # test set predictions
+  accuracy(truth = class, .pred_class)
+```
+## Model tuning
+Lets make a decision tree and tune the parameters to get it working well
+
+```{r}
+library(vip)
+#note that thi is using the same cell data from before, so if starting from here you'll need to reload it
+
+tune_spec <-
+  decision_tree(
+  cost_complexity = tune(),
+  tree_depth = tune()
+  ) %>%
+  set_engine("rpart") %>%
+  set_mode("classification")
+
+tree_grid <-  grid_regular(cost_complexity(),
+                           tree_depth(),
+                           levels=5)
+
+set.seed(345)
+tree_wf <- workflow() %>%
+  add_model(tune_spec) %>%
+  add_formula(class ~.)
+
+tree_res <- tree_wf %>% 
+  tune_grid(
+    resamples = folds,
+    grid = tree_grid
+  )
+```
+Plotting results
+```{r}
+tree_res %>%
+  collect_metrics() %>%
+  mutate(tree_depth = factor(tree_depth)) %>%
+  ggplot(aes(cost_complexity, mean, color = tree_depth)) +
+  geom_line(size = 1.5, alpha = 0.6) +
+  geom_point(size = 2) +
+  facet_wrap(~ .metric, scales = "free", nrow = 2) +
+  scale_x_log10(labels = scales::label_number()) +
+  scale_color_viridis_d(option = "plasma", begin = .9, end = 0)
+
+tree_res %>%
+  show_best("roc_auc")
+
+best_tree <-tree_res %>%
+  select_best("roc_auc")
+
+best_tree
+
+final_wf <- tree_wf %>%
+  finalize_workflow(best_tree)
+```
+
+Exploring the results
+
+```{r}
+final_tree <- final_wf %>%
+  fit(data = cell_train)
+
+final_tree
+
+#looking at variable importance
+
+final_tree %>%
+  pull_workflow_fit()%>%
+  vip()
+
+final_fit <- 
+  final_wf %>%
+  last_fit(cell_split) #this last_fit function will fit the split data training set and then evaluate on the split data test set.
+
+final_fit %>%
+  collect_metrics()
+#> # A tibble: 2 x 4
+#>   .metric  .estimator .estimate .config             
+#>   <chr>    <chr>          <dbl> <chr>               
+#> 1 accuracy binary         0.802 Preprocessor1_Model1
+#> 2 roc_auc  binary         0.860 Preprocessor1_Model1
+
+final_fit %>%
+  collect_predictions() %>% 
+  roc_curve(class, .pred_PS) %>% 
+  autoplot()
+```
+
